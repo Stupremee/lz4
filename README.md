@@ -1,4 +1,3 @@
-# LZ77
+# `Lz4`
 
-A lz77 decompressor and compressor written in Rust which can be
-used in a `no_std` environment.
+Safe, fast and `no_std`-compatible lz4 compression implementation.
