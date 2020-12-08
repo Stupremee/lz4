@@ -5,8 +5,10 @@ version = "0.1.0"
 authors = ["Justus K <justus.k@protonmail.com>"]
 edition = "2018"
 
-[dependencies]
-uninit = { version = "0.4.0", default-features = false }
-
 [features]
-alloc = ["uninit/alloc"]
+alloc = []
+
+[dependencies]
+
+[dev-dependencies]
+base64 = "0.13.0"

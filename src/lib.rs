@@ -1,13 +1,25 @@
 //! Safe and fast Lz4 compression implemented in `no_std` Rust.
-// #![deny(unsafe_code, warnings, missing_docs)]
+#![forbid(unsafe_code)]
+#![feature(min_const_generics)]
+// #![deny(warnings, missing_docs)]
 #![no_std]
 
-#[cfg(feature = "alloc")]
-extern crate alloc;
+// pub mod decompress;
 
-use uninit::out_ref::Out;
+mod buf;
+pub use buf::*;
 
-/// ...
-pub fn decompress<'out>(data: &'_ [u8], out: Out<'out, [u8]>) -> &'out [u8] {
-    unimplemented!()
+/// Provides the maximum size that LZ4 compression may output in a "worst case" scenario.
+///
+/// This function is mostly useful to allocate enough memory.
+/// Returns 0 if the input size is 0 or the input size is too large.
+pub const fn compressed_bound(size: usize) -> usize {
+    // 2.113.929.216 bytes
+    const MAX_INPUT_SIZE: usize = 0x7E000000;
+
+    if size > MAX_INPUT_SIZE || size == 0 {
+        0
+    } else {
+        size + (size / 255) + 16
+    }
 }
