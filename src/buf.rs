@@ -1,7 +1,5 @@
 //! Vec-Like Operations that also work in `no_std` and without `alloc`.
 
-use core::ops;
-
 /// Represents anything that can be used to store the resulting data
 /// of a LZ4 operation.
 ///
@@ -23,6 +21,12 @@ pub trait Buf<T> {
 
     /// Return the number of initialized elements in this buffer.
     fn len(&self) -> usize;
+
+    /// Returns a slice to the inner storage of this buf.
+    fn as_slice(&self) -> &[T];
+
+    /// Returns a mutable slice to the inner storage of this buf.
+    fn as_mut_slice(&mut self) -> &mut [T];
 
     /// Extends this buffer with the items contained in the iterator.
     ///
@@ -48,7 +52,8 @@ pub trait Buf<T> {
     /// Resizes this buffer so that the new length is equal to `len`.
     ///
     /// If this buffers len is greater than the given len, the required elements
-    /// are filled by cloning the given item.
+    /// are filled by cloning the given item. Note that this will not truncate
+    /// the buf if `len` is smaller then this bufs len.
     ///
     /// Returns `true` if it was able to reserve enough memory,
     /// and `false` if there's not enough memory left.
@@ -74,7 +79,7 @@ pub trait Buf<T> {
 }
 
 /// A `Buf` implementation that uses a fixed size array as the backing storage.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct ArrayBuf<T, const N: usize> {
     arr: [T; N],
     len: usize,
@@ -91,16 +96,6 @@ impl<T, const N: usize> ArrayBuf<T, N> {
             arr: [T::default(); N],
             len: 0,
         }
-    }
-
-    /// Returns a slice to the inner storage of this buf.
-    pub fn as_slice(&self) -> &[T] {
-        &self.arr
-    }
-
-    /// Returns a mutable slice to the inner storage of this buf.
-    pub fn as_mut_slice(&mut self) -> &mut [T] {
-        &mut self.arr
     }
 }
 
@@ -122,31 +117,63 @@ impl<T, const N: usize> Buf<T> for ArrayBuf<T, N> {
     fn len(&self) -> usize {
         self.len
     }
-}
 
-impl<T, const N: usize> ops::Deref for ArrayBuf<T, N> {
-    type Target = [T];
+    fn as_slice(&self) -> &[T] {
+        &self.arr[..self.len]
+    }
 
-    fn deref(&self) -> &Self::Target {
-        self.as_slice()
+    fn as_mut_slice(&mut self) -> &mut [T] {
+        &mut self.arr[..self.len]
     }
 }
 
-impl<T, const N: usize> ops::DerefMut for ArrayBuf<T, N> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.as_mut_slice()
-    }
-}
+#[cfg(any(feature = "alloc", test))]
+pub use heap::*;
 
-impl<T, const N: usize> AsRef<[T]> for ArrayBuf<T, N> {
-    fn as_ref(&self) -> &[T] {
-        self
+#[cfg(any(feature = "alloc", test))]
+mod heap {
+    use super::Buf;
+    use alloc::vec::Vec;
+
+    /// A `Buf` that will dynamically allocate the memory on the heap.
+    #[derive(Clone)]
+    pub struct HeapBuf<T>(Vec<T>);
+
+    impl<T> HeapBuf<T> {
+        /// Create a new `HeapBuf`.
+        pub fn new() -> Self {
+            Self(Vec::new())
+        }
+    }
+
+    impl<T> Buf<T> for HeapBuf<T> {
+        fn push(&mut self, item: T) -> Option<T> {
+            self.0.push(item);
+            None
+        }
+
+        fn reserve(&mut self, count: usize) -> bool {
+            self.0.reserve(count);
+            true
+        }
+
+        fn len(&self) -> usize {
+            self.0.len()
+        }
+
+        fn as_slice(&self) -> &[T] {
+            &self.0
+        }
+
+        fn as_mut_slice(&mut self) -> &mut [T] {
+            &mut self.0
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ArrayBuf, Buf};
+    use super::{ArrayBuf, Buf, HeapBuf};
 
     #[test]
     fn array_buf() {
@@ -165,6 +192,26 @@ mod tests {
 
         let mut buf = ArrayBuf::<u8, 4>::new();
         assert!(buf.resize(4, 0));
-        assert!(!buf.resize(5, 0));
+        assert!(!buf.resize(4, 0));
+    }
+
+    #[test]
+    fn heap_buf() {
+        let mut buf = HeapBuf::<u8>::new();
+
+        assert!(buf.reserve(4));
+        assert!(buf.reserve(5));
+
+        assert!(buf.push(1).is_none());
+        assert!(buf.push(2).is_none());
+        assert!(buf.push(3).is_none());
+        assert!(buf.push(4).is_none());
+        assert!(buf.push(5).is_none());
+
+        assert_eq!(buf.len(), 5);
+
+        let mut buf = HeapBuf::<u8>::new();
+        assert!(buf.resize(6, 0));
+        assert!(buf.resize(7, 0));
     }
 }

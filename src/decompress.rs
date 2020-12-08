@@ -1,5 +1,5 @@
+use crate::Buf;
 use core::fmt;
-use generic_vec::{raw::Storage, GenericVec};
 
 macro_rules! read_u8 {
     ($arr:ident) => {
@@ -53,7 +53,7 @@ impl fmt::Display for Error {
     }
 }
 
-pub fn decompress<S: Storage<u8>>(data: &[u8], out: &mut GenericVec<u8, S>) -> Result<(), Error> {
+pub fn decompress<S: Buf<u8>>(data: &[u8], out: &mut S) -> Result<(), Error> {
     let mut reader = data.iter();
     let reader = reader.by_ref();
 
@@ -68,8 +68,10 @@ pub fn decompress<S: Storage<u8>>(data: &[u8], out: &mut GenericVec<u8, S>) -> R
         let len = read_int!(reader, len);
 
         // now copy `len` literal bytes into the output
-        out.reserve(len);
-        out.extend(reader.take(len));
+        if !out.reserve(len) {
+            return Err(Error::MemoryLimitExceeded);
+        }
+        out.extend(len, reader.take(len).copied());
 
         // read low byte of the next offset
         let low = match reader.next() {
@@ -96,29 +98,32 @@ pub fn decompress<S: Storage<u8>>(data: &[u8], out: &mut GenericVec<u8, S>) -> R
 }
 
 /// Optimized version of the copy operation.
-fn copy<S: Storage<u8>>(
-    offset: usize,
-    len: usize,
-    out: &mut GenericVec<u8, S>,
-) -> Result<(), Error> {
+fn copy<S: Buf<u8>>(offset: usize, len: usize, out: &mut S) -> Result<(), Error> {
     let out_len = out.len();
 
     match offset {
         // invalid offset
         0 => return Err(Error::ZeroMatchOffset),
         // repeat the last byte we output
-        1 => out.resize(
-            out_len + len,
-            out.last()
-                .copied()
-                .expect("output should ever be filled here"),
-        ),
+        1 => {
+            if !out.resize(
+                out_len + len,
+                out.as_slice()
+                    .last()
+                    .copied()
+                    .expect("output should ever be filled here"),
+            ) {
+                return Err(Error::MemoryLimitExceeded);
+            }
+        }
         // copy each byte manually
         offset => {
-            out.reserve(len);
+            if !out.reserve(len) {
+                return Err(Error::MemoryLimitExceeded);
+            }
             let start = out_len - offset;
             (0..len).for_each(|idx| {
-                let x = out[start + idx];
+                let x = out.as_slice()[start + idx];
                 out.push(x);
             });
         }
@@ -129,27 +134,24 @@ fn copy<S: Storage<u8>>(
 
 #[cfg(test)]
 mod tests {
-    use generic_vec::{gvec, raw::Storage, GenericVec, TypeVec};
+    use crate::{ArrayBuf, Buf};
 
-    fn decompress<'res, S: Storage<u8>>(
-        buf: &'res mut GenericVec<u8, S>,
-        input: &[u8],
-    ) -> &'res str {
+    fn decompress<'res, S: Buf<u8>>(buf: &'res mut S, input: &[u8]) -> &'res str {
         super::decompress(input, buf).unwrap();
-        core::str::from_utf8(buf).unwrap()
+        core::str::from_utf8(buf.as_slice()).unwrap()
     }
 
     #[test]
     fn empty() {
-        let mut buf: TypeVec<u8, [u8; 0]> = gvec![];
+        let mut buf = ArrayBuf::<u8, 0>::new();
         assert_eq!(decompress(&mut buf, &[]), "");
     }
 
     #[test]
     fn hello() {
         let raw = [0x11, b'a', 1, 0];
-        let mut buf: GenericVec<u8, [u8; 7]> = GenericVec::with_capacity(7);
-        assert_eq!(decompress(&mut buf, &raw), "aaaaaaa");
+        let mut buf = ArrayBuf::<u8, 6>::new();
+        assert_eq!(decompress(&mut buf, &raw), "aaaaaa");
     }
 
     #[test]
@@ -157,7 +159,10 @@ mod tests {
         let raw = "8B1UaGUgcXVpY2sgYnJvd24gZm94IGp1bXBzIG92ZXIgdGhlIGxhenkgZG9nLg==";
         let raw = base64::decode(raw).unwrap();
 
-        let mut buf: GenericVec<u8, [u8; 44]> = GenericVec::with_capacity(44);
-        assert_eq!(decompress(&mut buf, &raw), "aaaaaaa");
+        let mut buf = ArrayBuf::<u8, 128>::new();
+        assert_eq!(
+            decompress(&mut buf, &raw),
+            "he quick brown fox jumps over the lazy dog."
+        );
     }
 }

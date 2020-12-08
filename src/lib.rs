@@ -4,7 +4,10 @@
 // #![deny(warnings, missing_docs)]
 #![no_std]
 
-// pub mod decompress;
+#[cfg(any(feature = "alloc", test))]
+extern crate alloc;
+
+pub mod decompress;
 
 mod buf;
 pub use buf::*;
