@@ -144,6 +144,11 @@ mod heap {
         pub fn new() -> Self {
             Self(Vec::new())
         }
+
+        /// Create a new `HeapBuf` with the specified capacity.
+        pub fn with_capacity(cap: usize) -> Self {
+            Self(Vec::with_capacity(cap))
+        }
     }
 
     impl<T> Buf<T> for HeapBuf<T> {

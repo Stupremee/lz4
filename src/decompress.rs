@@ -1,11 +1,7 @@
+//! Implementation of decompression of lz4 compressed data.
+
 use crate::Buf;
 use core::fmt;
-
-macro_rules! read_u8 {
-    ($arr:ident) => {
-        $arr.next().copied().ok_or(Error::UnexpectedEof)?
-    };
-}
 
 macro_rules! read_int {
     ($arr:ident, $first:expr) => {{
@@ -15,7 +11,7 @@ macro_rules! read_int {
                 .take_while(|x| **x == 255)
                 .map(|x| *x as usize)
                 .sum::<usize>()
-                + (read_u8!($arr) as usize);
+                + (read_byte($arr.by_ref())? as usize);
             first + x
         } else {
             first
@@ -23,7 +19,11 @@ macro_rules! read_int {
     }};
 }
 
-/// The error type that is returned by [`compression`](crate::compression) or [`decompression`](crate::decompression).
+/// The magic number which is at the start of every
+/// compressed data in the frame format.
+const MAGIC: u32 = 0x184D2204;
+
+/// The error type that is returned by various decompression-related methods.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub enum Error {
@@ -37,6 +37,11 @@ pub enum Error {
     ///
     /// This is most likely caused by trying to decompress invalid input.
     ZeroMatchOffset,
+
+    /// The data that was tried to decompress, started with an invalid magic number.
+    ///
+    /// This is most likely caused by trying to decompress invalid input.
+    InvalidMagic,
 }
 
 impl fmt::Display for Error {
@@ -49,11 +54,66 @@ impl fmt::Display for Error {
             Error::ZeroMatchOffset => f.write_str(
                 "The offset was zero. This is most likely caused by trying to parse invalid input.",
             ),
+
+            Error::InvalidMagic => f.write_str(
+                "The magic number is invalid. This is most likely caused by trying to parse invalid input.",
+            ),
         }
     }
 }
 
-pub fn decompress<S: Buf<u8>>(data: &[u8], out: &mut S) -> Result<(), Error> {
+#[inline]
+fn read<'byte, I: Iterator<Item = &'byte u8>, const N: usize>(reader: I) -> Result<[u8; N], Error> {
+    let mut buf = [0u8; N];
+
+    let mut count = 0;
+    for (entry, val) in buf.iter_mut().zip(reader.take(N).copied()) {
+        *entry = val;
+        count += 1;
+    }
+
+    if count != N {
+        Err(Error::UnexpectedEof)
+    } else {
+        Ok(buf)
+    }
+}
+
+#[inline]
+fn read_byte<'byte, I: Iterator<Item = &'byte u8>>(reader: I) -> Result<u8, Error> {
+    Ok(read::<I, 1>(reader)?[0])
+}
+
+/// Decompressed LZ4-compressed data and pushes the decompressed data into the
+/// output buf.
+///
+/// This function is capable of parsing and decompressing
+/// data that was compressed using the [Frame format] described
+/// by the LZ4 specification.
+///
+/// [Frame format]: https://github.com/lz4/lz4/blob/dev/doc/lz4_Frame_format.md
+pub fn decompress<O: Buf<u8>>(input: &[u8], output: &mut O) -> Result<(), Error> {
+    let mut reader = input.iter();
+    let reader = reader.by_ref();
+
+    let magic = u32::from_le_bytes(read(reader)?);
+
+    if magic != MAGIC {
+        return Err(Error::InvalidMagic);
+    }
+    todo!()
+}
+
+/// Decompresses a LZ4-compressed block of `data`
+///
+/// The decompressed data will be written into the `out` buffer. If the buffer
+/// doesn't have enough memory, an error will be returned.
+///
+/// Note that this method is not able to decompress data that was compressed
+/// by tools like [`lz4`](https://lz4.github.io/lz4) since the compressed data
+/// is compressed using the frame format. For decompressing data like this use
+/// [`decompress`](crate::decompress::decompress) function instead.
+pub fn decompress_block<O: Buf<u8>>(data: &[u8], out: &mut O) -> Result<(), Error> {
     let mut reader = data.iter();
     let reader = reader.by_ref();
 
@@ -82,7 +142,7 @@ pub fn decompress<S: Buf<u8>>(data: &[u8], out: &mut S) -> Result<(), Error> {
         };
 
         // read offset for the duplicated data
-        let offset = u16::from_le_bytes([low, read_u8!(reader)]);
+        let offset = u16::from_le_bytes([low, read_byte(reader.by_ref())?]);
 
         // the match length represents the number we copy the data.
         // it's stored in the second bitfield of the token.
@@ -97,8 +157,9 @@ pub fn decompress<S: Buf<u8>>(data: &[u8], out: &mut S) -> Result<(), Error> {
     Ok(())
 }
 
+// TODO: Probably replace with `ptr::copy_nonoverlapping`
 /// Optimized version of the copy operation.
-fn copy<S: Buf<u8>>(offset: usize, len: usize, out: &mut S) -> Result<(), Error> {
+fn copy<O: Buf<u8>>(offset: usize, len: usize, out: &mut O) -> Result<(), Error> {
     let out_len = out.len();
 
     match offset {
@@ -136,33 +197,43 @@ fn copy<S: Buf<u8>>(offset: usize, len: usize, out: &mut S) -> Result<(), Error>
 mod tests {
     use crate::{ArrayBuf, Buf};
 
-    fn decompress<'res, S: Buf<u8>>(buf: &'res mut S, input: &[u8]) -> &'res str {
-        super::decompress(input, buf).unwrap();
+    fn decompress_block<'res, S: Buf<u8>>(buf: &'res mut S, input: &[u8]) -> &'res str {
+        super::decompress_block(input, buf).unwrap();
         core::str::from_utf8(buf.as_slice()).unwrap()
     }
 
     #[test]
-    fn empty() {
+    fn block_empty() {
         let mut buf = ArrayBuf::<u8, 0>::new();
-        assert_eq!(decompress(&mut buf, &[]), "");
+        assert_eq!(decompress_block(&mut buf, &[]), "");
     }
 
     #[test]
-    fn hello() {
+    fn block_hello() {
         let raw = [0x11, b'a', 1, 0];
         let mut buf = ArrayBuf::<u8, 6>::new();
-        assert_eq!(decompress(&mut buf, &raw), "aaaaaa");
+        assert_eq!(decompress_block(&mut buf, &raw), "aaaaaa");
     }
 
     #[test]
-    fn more() {
+    fn block_more() {
         let raw = "8B1UaGUgcXVpY2sgYnJvd24gZm94IGp1bXBzIG92ZXIgdGhlIGxhenkgZG9nLg==";
         let raw = base64::decode(raw).unwrap();
 
         let mut buf = ArrayBuf::<u8, 128>::new();
         assert_eq!(
-            decompress(&mut buf, &raw),
+            decompress_block(&mut buf, &raw),
             "he quick brown fox jumps over the lazy dog."
         );
+    }
+
+    #[test]
+    fn hello() {
+        let raw = "BCJNGGRApwYAAIBoZWxsbwoAAAAA+VtrlA==";
+        let raw = base64::decode(raw).unwrap();
+
+        let mut buf = ArrayBuf::<u8, 5>::new();
+        super::decompress(&raw, &mut buf).unwrap();
+        assert_eq!(core::str::from_utf8(buf.as_slice()), Ok("hello"));
     }
 }
