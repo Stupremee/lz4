@@ -3,25 +3,17 @@
 use crate::Buf;
 use core::fmt;
 
-macro_rules! read_int {
-    ($arr:ident, $first:expr) => {{
-        let first = $first;
-        if first == 15 {
-            let x = $arr
-                .take_while(|x| **x == 255)
-                .map(|x| *x as usize)
-                .sum::<usize>()
-                + (read_byte($arr.by_ref())? as usize);
-            first + x
-        } else {
-            first
-        }
-    }};
-}
+mod iter;
+pub(crate) use iter::ByteIter;
+
+pub mod raw;
 
 /// The magic number which is at the start of every
 /// compressed data in the frame format.
 const MAGIC: u32 = 0x184D2204;
+
+/// The version this decompresser is capable of decompressing.
+const VERSION: u8 = 0b01;
 
 /// The error type that is returned by various decompression-related methods.
 #[derive(Clone, Copy, Debug)]
@@ -42,6 +34,13 @@ pub enum Error {
     ///
     /// This is most likely caused by trying to decompress invalid input.
     InvalidMagic,
+    /// Tried to decompress a version of LZ4 that is currently not supported.
+    ///
+    /// This can be caused by either providing an invalid input
+    /// or using another version of the specification.
+    VersionNotSupported,
+    /// Invalid input provided.
+    InvalidInput,
 }
 
 impl fmt::Display for Error {
@@ -58,30 +57,10 @@ impl fmt::Display for Error {
             Error::InvalidMagic => f.write_str(
                 "The magic number is invalid. This is most likely caused by trying to parse invalid input.",
             ),
+            Error::VersionNotSupported => f.write_str("The data was comrpessed using a version of LZ4 that is not supported."),
+            Error::InvalidInput => f.write_str("The provided data is invalid."),
         }
     }
-}
-
-#[inline]
-fn read<'byte, I: Iterator<Item = &'byte u8>, const N: usize>(reader: I) -> Result<[u8; N], Error> {
-    let mut buf = [0u8; N];
-
-    let mut count = 0;
-    for (entry, val) in buf.iter_mut().zip(reader.take(N).copied()) {
-        *entry = val;
-        count += 1;
-    }
-
-    if count != N {
-        Err(Error::UnexpectedEof)
-    } else {
-        Ok(buf)
-    }
-}
-
-#[inline]
-fn read_byte<'byte, I: Iterator<Item = &'byte u8>>(reader: I) -> Result<u8, Error> {
-    Ok(read::<I, 1>(reader)?[0])
 }
 
 /// Decompressed LZ4-compressed data and pushes the decompressed data into the
@@ -93,139 +72,94 @@ fn read_byte<'byte, I: Iterator<Item = &'byte u8>>(reader: I) -> Result<u8, Erro
 ///
 /// [Frame format]: https://github.com/lz4/lz4/blob/dev/doc/lz4_Frame_format.md
 pub fn decompress<O: Buf<u8>>(input: &[u8], output: &mut O) -> Result<(), Error> {
-    let mut reader = input.iter();
-    let reader = reader.by_ref();
+    //let mut reader = input.iter();
 
-    let magic = u32::from_le_bytes(read(reader)?);
+    //// every LZ4-frame-format data starts with a magic number
+    //let magic = u32::from_le_bytes(read(reader.by_ref())?);
+    //if magic != MAGIC {
+    //return Err(Error::InvalidMagic);
+    //}
 
-    if magic != MAGIC {
-        return Err(Error::InvalidMagic);
-    }
+    //// after the magic comes the frame descriptor, which
+    //// contains several flags and other data that may be important.
+    //let flag = read_byte(reader.by_ref())?;
+
+    //// high 2 bits are the version of this data
+    //let version = flag >> 6;
+    //if version != VERSION {
+    //return Err(Error::VersionNotSupported);
+    //}
+
+    //// currently not needed. only required once we want to decompress
+    //// in parallel.
+    //let _block_independence = flag & 0x20;
+
+    //// if 1, each block contains a checksum to validate
+    //// the data and detect corruption.
+    //let block_checksum = (flag & 0x10) != 0;
+    //assert!(!block_checksum, "Checksums are currently not supported");
+
+    //// if 1, the size of the whole compressed data will be encoded
+    //// in the frame header
+    //let content_size = (flag & 0x08) != 0;
+
+    //// if 1, there will be another checksum at the end of the data,
+    //// to detect data corruption.
+    //let content_checksum = (flag & 0x04) != 0;
+    //assert!(!content_checksum, "Checksums are currently not supported");
+
+    //// if 1, there will be 4 byte wide dictionary id
+    //// in the frame header.
+    //let dictionary = (flag & 0x01) != 0;
+
+    //// the next byte is the block descriptor.
+    ////
+    //// currently it only contains the maximum size
+    //// of the original (uncompressed) of a block.
+    //let bd = read_byte(reader.by_ref())?;
+
+    //// the value inside the 3 bits of the block descriptor
+    //// can be converted to an actual size using the following table
+    ////
+    //// currently not required
+    //let size_idx = (bd >> 4) & 0x7;
+    //let _size = match size_idx {
+    //// 64KB
+    //4 => 64 << 10,
+    //// 256KB
+    //5 => 256 << 10,
+    //// 1MB
+    //6 => 1 << 20,
+    //// 4MB
+    //7 => 4 << 20,
+    //_ => return Err(Error::InvalidInput),
+    //};
+
+    //// read the actual content size if the flag was present
+    //let content_size = if content_size {
+    //let num = u64::from_le_bytes(read(reader.by_ref())?);
+    //Some(num)
+    //} else {
+    //None
+    //};
+
+    //// read the actual dictionary id if the flag was present
+    //let dictionary = if dictionary {
+    //let num = u32::from_le_bytes(read(reader.by_ref())?);
+    //Some(num)
+    //} else {
+    //None
+    //};
+
+    //// checksum of the frame header
+    //let header_checksum = read_byte(reader.by_ref())?;
+
     todo!()
-}
-
-/// Decompresses a LZ4-compressed block of `data`
-///
-/// The decompressed data will be written into the `out` buffer. If the buffer
-/// doesn't have enough memory, an error will be returned.
-///
-/// Note that this method is not able to decompress data that was compressed
-/// by tools like [`lz4`](https://lz4.github.io/lz4) since the compressed data
-/// is compressed using the frame format. For decompressing data like this use
-/// [`decompress`](crate::decompress::decompress) function instead.
-pub fn decompress_block<O: Buf<u8>>(data: &[u8], out: &mut O) -> Result<(), Error> {
-    let mut reader = data.iter();
-    let reader = reader.by_ref();
-
-    // loop through all sequences
-    while let Some(&token) = reader.next() {
-        // the first part of a sequence is the token.
-        // the token is composed of two 4-bit-wide bitfields.
-        // the first one describes the length of the literal, if one or more is present.
-        //
-        // if the len is 15, there are more bytes that describe the length
-        let len = (token >> 4) as usize;
-        let len = read_int!(reader, len);
-
-        // now copy `len` literal bytes into the output
-        if !out.reserve(len) {
-            return Err(Error::MemoryLimitExceeded);
-        }
-        out.extend(len, reader.take(len).copied());
-
-        // read low byte of the next offset
-        let low = match reader.next() {
-            Some(&low) => low,
-            // this is the last sequence, because there is no
-            // data left that has to be duplicated
-            None => break,
-        };
-
-        // read offset for the duplicated data
-        let offset = u16::from_le_bytes([low, read_byte(reader.by_ref())?]);
-
-        // the match length represents the number we copy the data.
-        // it's stored in the second bitfield of the token.
-        //
-        // the minimum value of the len is 4, which leads to 19 as the maxium value
-        let len = 4 + read_int!(reader, (token & 0xF) as usize);
-
-        // now copy the data that is duplicated
-        copy(offset as usize, len, out)?;
-    }
-
-    Ok(())
-}
-
-// TODO: Probably replace with `ptr::copy_nonoverlapping`
-/// Optimized version of the copy operation.
-fn copy<O: Buf<u8>>(offset: usize, len: usize, out: &mut O) -> Result<(), Error> {
-    let out_len = out.len();
-
-    match offset {
-        // invalid offset
-        0 => return Err(Error::ZeroMatchOffset),
-        // repeat the last byte we output
-        1 => {
-            if !out.resize(
-                out_len + len,
-                out.as_slice()
-                    .last()
-                    .copied()
-                    .expect("output should ever be filled here"),
-            ) {
-                return Err(Error::MemoryLimitExceeded);
-            }
-        }
-        // copy each byte manually
-        offset => {
-            if !out.reserve(len) {
-                return Err(Error::MemoryLimitExceeded);
-            }
-            let start = out_len - offset;
-            (0..len).for_each(|idx| {
-                let x = out.as_slice()[start + idx];
-                out.push(x);
-            });
-        }
-    };
-
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use crate::{ArrayBuf, Buf};
-
-    fn decompress_block<'res, S: Buf<u8>>(buf: &'res mut S, input: &[u8]) -> &'res str {
-        super::decompress_block(input, buf).unwrap();
-        core::str::from_utf8(buf.as_slice()).unwrap()
-    }
-
-    #[test]
-    fn block_empty() {
-        let mut buf = ArrayBuf::<u8, 0>::new();
-        assert_eq!(decompress_block(&mut buf, &[]), "");
-    }
-
-    #[test]
-    fn block_hello() {
-        let raw = [0x11, b'a', 1, 0];
-        let mut buf = ArrayBuf::<u8, 6>::new();
-        assert_eq!(decompress_block(&mut buf, &raw), "aaaaaa");
-    }
-
-    #[test]
-    fn block_more() {
-        let raw = "8B1UaGUgcXVpY2sgYnJvd24gZm94IGp1bXBzIG92ZXIgdGhlIGxhenkgZG9nLg==";
-        let raw = base64::decode(raw).unwrap();
-
-        let mut buf = ArrayBuf::<u8, 128>::new();
-        assert_eq!(
-            decompress_block(&mut buf, &raw),
-            "he quick brown fox jumps over the lazy dog."
-        );
-    }
 
     #[test]
     fn hello() {

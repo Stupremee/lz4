@@ -5,7 +5,7 @@
 ///
 /// Contains different required Vec-Like operations, that are also
 /// applyable to an array or slice.
-pub trait Buf<T> {
+pub trait Buf<T: Copy> {
     /// Push an item to the end of this buffer.
     ///
     /// Returns the given `item`, if there is no capacity
@@ -28,26 +28,11 @@ pub trait Buf<T> {
     /// Returns a mutable slice to the inner storage of this buf.
     fn as_mut_slice(&mut self) -> &mut [T];
 
-    /// Extends this buffer with the items contained in the iterator.
-    ///
-    /// It also requires the length of the iterator, to pre-reserve
-    /// the space that is required for the operation.
+    /// Extends this buffer with the items contained in the slice.
     ///
     /// Returns `true` if it was able to reserve enough memory,
     /// and `false` if there's not enough memory left.
-    fn extend<I>(&mut self, len: usize, iter: I) -> bool
-    where
-        I: IntoIterator<Item = T>,
-    {
-        if !self.reserve(len) {
-            false
-        } else {
-            iter.into_iter().for_each(|item| {
-                self.push(item);
-            });
-            true
-        }
-    }
+    fn extend(&mut self, buf: &[T]) -> bool;
 
     /// Resizes this buffer so that the new length is equal to `len`.
     ///
@@ -99,7 +84,7 @@ impl<T, const N: usize> ArrayBuf<T, N> {
     }
 }
 
-impl<T, const N: usize> Buf<T> for ArrayBuf<T, N> {
+impl<T: Copy + std::fmt::Debug, const N: usize> Buf<T> for ArrayBuf<T, N> {
     fn push(&mut self, item: T) -> Option<T> {
         let entry = match self.arr.get_mut(self.len) {
             Some(entry) => entry,
@@ -108,6 +93,17 @@ impl<T, const N: usize> Buf<T> for ArrayBuf<T, N> {
         *entry = item;
         self.len += 1;
         None
+    }
+
+    fn extend(&mut self, buf: &[T]) -> bool {
+        if !self.reserve(buf.len()) {
+            false
+        } else {
+            let slice = &mut self.arr[self.len..self.len + buf.len()];
+            slice.copy_from_slice(buf);
+            self.len += buf.len();
+            true
+        }
     }
 
     fn reserve(&mut self, count: usize) -> bool {
@@ -151,10 +147,16 @@ mod heap {
         }
     }
 
-    impl<T> Buf<T> for HeapBuf<T> {
+    impl<T: Copy> Buf<T> for HeapBuf<T> {
         fn push(&mut self, item: T) -> Option<T> {
             self.0.push(item);
             None
+        }
+
+        fn extend(&mut self, buf: &[T]) -> bool {
+            self.reserve(buf.len());
+            self.0.extend_from_slice(buf);
+            true
         }
 
         fn reserve(&mut self, count: usize) -> bool {
