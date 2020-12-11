@@ -84,7 +84,7 @@ impl<T, const N: usize> ArrayBuf<T, N> {
     }
 }
 
-impl<T: Copy + std::fmt::Debug, const N: usize> Buf<T> for ArrayBuf<T, N> {
+impl<T: Copy, const N: usize> Buf<T> for ArrayBuf<T, N> {
     fn push(&mut self, item: T) -> Option<T> {
         let entry = match self.arr.get_mut(self.len) {
             Some(entry) => entry,

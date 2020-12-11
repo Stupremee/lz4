@@ -10,7 +10,6 @@ pub(crate) struct ByteIter<'input> {
 
 impl<'input> ByteIter<'input> {
     pub(crate) fn new(bytes: &'input [u8]) -> Self {
-        dbg!(bytes);
         Self { bytes, idx: 0 }
     }
 
@@ -42,7 +41,7 @@ impl<'input> ByteIter<'input> {
             return Ok(first);
         }
 
-        let mut x = 0usize;
+        let mut x = 15usize;
         loop {
             let byte = self.read_byte()?;
             x += byte as usize;

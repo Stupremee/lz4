@@ -28,7 +28,8 @@ pub fn decompress_block<O: Buf<u8>>(data: &[u8], out: &mut O) -> Result<(), Erro
         if !out.reserve(len) {
             return Err(Error::MemoryLimitExceeded);
         }
-        out.extend(reader.take(len)?);
+        let slice = reader.take(len)?;
+        out.extend(slice);
 
         // read low byte of the next offset
         let low = match reader.read_byte() {
@@ -48,7 +49,6 @@ pub fn decompress_block<O: Buf<u8>>(data: &[u8], out: &mut O) -> Result<(), Erro
         let len = 4 + reader.read_int((token & 0xF) as usize)?;
 
         // now copy the data that is duplicated
-        dbg!(offset);
         copy(offset as usize, len, out)?;
     }
 
@@ -121,7 +121,7 @@ mod tests {
         let mut buf = ArrayBuf::<u8, 128>::new();
         assert_eq!(
             decompress_block(&mut buf, &raw),
-            "he quick brown fox jumps over the lazy dog."
+            "The quick brown fox jumps over the lazy dog."
         );
     }
 }
