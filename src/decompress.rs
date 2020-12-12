@@ -1,10 +1,12 @@
 //! Implementation of decompression of lz4 compressed data.
 
-use crate::Buf;
 use core::fmt;
 
 mod iter;
 pub(crate) use iter::ByteIter;
+
+mod framed;
+pub use framed::*;
 
 pub mod raw;
 
@@ -41,6 +43,21 @@ pub enum Error {
     VersionNotSupported,
     /// Invalid input provided.
     InvalidInput,
+    /// A reserved bit was 1.
+    ///
+    /// This is either caused by invalid input, or by trying to
+    /// decompress data that was compressed using a newer/older
+    /// version of the spec.
+    ReservedBitHigh,
+    /// Tried to decompress frame header which contained an illegal
+    /// number for the maximum block size.
+    InvalidMaxBlockSize,
+    /// The checksum check for the frame header failed.
+    HeaderChecksumInvalid,
+    /// The checksum check for a block failed.
+    BlockChecksumInvalid,
+    /// The checksum check for the decompressed content failed.
+    ContentChecksumInvalid,
 }
 
 impl fmt::Display for Error {
@@ -59,102 +76,13 @@ impl fmt::Display for Error {
             ),
             Error::VersionNotSupported => f.write_str("The data was comrpessed using a version of LZ4 that is not supported."),
             Error::InvalidInput => f.write_str("The provided data is invalid."),
+            Error::ReservedBitHigh => f.write_str("One of the reserved bits was 1."),
+            Error::InvalidMaxBlockSize => f.write_str("Maximum block size is invalid"),
+            Error::HeaderChecksumInvalid => f.write_str("Frame header checksum verification failed."),
+            Error::BlockChecksumInvalid => f.write_str("Block checksum verification failed."),
+            Error::ContentChecksumInvalid => f.write_str("Content checksum verification failed."),
         }
     }
-}
-
-/// Decompressed LZ4-compressed data and pushes the decompressed data into the
-/// output buf.
-///
-/// This function is capable of parsing and decompressing
-/// data that was compressed using the [Frame format] described
-/// by the LZ4 specification.
-///
-/// [Frame format]: https://github.com/lz4/lz4/blob/dev/doc/lz4_Frame_format.md
-pub fn decompress<O: Buf<u8>>(input: &[u8], output: &mut O) -> Result<(), Error> {
-    //let mut reader = input.iter();
-
-    //// every LZ4-frame-format data starts with a magic number
-    //let magic = u32::from_le_bytes(read(reader.by_ref())?);
-    //if magic != MAGIC {
-    //return Err(Error::InvalidMagic);
-    //}
-
-    //// after the magic comes the frame descriptor, which
-    //// contains several flags and other data that may be important.
-    //let flag = read_byte(reader.by_ref())?;
-
-    //// high 2 bits are the version of this data
-    //let version = flag >> 6;
-    //if version != VERSION {
-    //return Err(Error::VersionNotSupported);
-    //}
-
-    //// currently not needed. only required once we want to decompress
-    //// in parallel.
-    //let _block_independence = flag & 0x20;
-
-    //// if 1, each block contains a checksum to validate
-    //// the data and detect corruption.
-    //let block_checksum = (flag & 0x10) != 0;
-    //assert!(!block_checksum, "Checksums are currently not supported");
-
-    //// if 1, the size of the whole compressed data will be encoded
-    //// in the frame header
-    //let content_size = (flag & 0x08) != 0;
-
-    //// if 1, there will be another checksum at the end of the data,
-    //// to detect data corruption.
-    //let content_checksum = (flag & 0x04) != 0;
-    //assert!(!content_checksum, "Checksums are currently not supported");
-
-    //// if 1, there will be 4 byte wide dictionary id
-    //// in the frame header.
-    //let dictionary = (flag & 0x01) != 0;
-
-    //// the next byte is the block descriptor.
-    ////
-    //// currently it only contains the maximum size
-    //// of the original (uncompressed) of a block.
-    //let bd = read_byte(reader.by_ref())?;
-
-    //// the value inside the 3 bits of the block descriptor
-    //// can be converted to an actual size using the following table
-    ////
-    //// currently not required
-    //let size_idx = (bd >> 4) & 0x7;
-    //let _size = match size_idx {
-    //// 64KB
-    //4 => 64 << 10,
-    //// 256KB
-    //5 => 256 << 10,
-    //// 1MB
-    //6 => 1 << 20,
-    //// 4MB
-    //7 => 4 << 20,
-    //_ => return Err(Error::InvalidInput),
-    //};
-
-    //// read the actual content size if the flag was present
-    //let content_size = if content_size {
-    //let num = u64::from_le_bytes(read(reader.by_ref())?);
-    //Some(num)
-    //} else {
-    //None
-    //};
-
-    //// read the actual dictionary id if the flag was present
-    //let dictionary = if dictionary {
-    //let num = u32::from_le_bytes(read(reader.by_ref())?);
-    //Some(num)
-    //} else {
-    //None
-    //};
-
-    //// checksum of the frame header
-    //let header_checksum = read_byte(reader.by_ref())?;
-
-    todo!()
 }
 
 #[cfg(test)]
@@ -166,8 +94,8 @@ mod tests {
         let raw = "BCJNGGRApwYAAIBoZWxsbwoAAAAA+VtrlA==";
         let raw = base64::decode(raw).unwrap();
 
-        let mut buf = ArrayBuf::<u8, 5>::new();
+        let mut buf = ArrayBuf::<u8, 6>::new();
         super::decompress(&raw, &mut buf).unwrap();
-        assert_eq!(core::str::from_utf8(buf.as_slice()), Ok("hello"));
+        assert_eq!(core::str::from_utf8(buf.as_slice()), Ok("hello\n"));
     }
 }

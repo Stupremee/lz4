@@ -9,6 +9,8 @@ edition = "2018"
 alloc = []
 
 [dependencies]
+bitflags = "1.2.1"
+twox-hash = { version = "1.6.0", default-features = false }
 
 [dev-dependencies]
 base64 = "0.13.0"
