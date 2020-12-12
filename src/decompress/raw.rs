@@ -1,6 +1,6 @@
 //! Implementation of decompressing raw LZ4-blocks.
 
-use super::{ByteIter, Error};
+use super::{ByteIter, DecompressError};
 use crate::Buf;
 
 /// Decompresses a LZ4-compressed block of `data`
@@ -12,7 +12,7 @@ use crate::Buf;
 /// by tools like [`lz4`](https://lz4.github.io/lz4) since the compressed data
 /// is compressed using the frame format. For decompressing data like this use
 /// [`decompress`](crate::decompress::decompress) function instead.
-pub fn decompress_block<O: Buf<u8>>(data: &[u8], out: &mut O) -> Result<(), Error> {
+pub fn decompress_block<O: Buf<u8>>(data: &[u8], out: &mut O) -> Result<(), DecompressError> {
     let mut reader = ByteIter::new(data);
 
     // loop through all sequences
@@ -26,7 +26,7 @@ pub fn decompress_block<O: Buf<u8>>(data: &[u8], out: &mut O) -> Result<(), Erro
 
         // now copy `len` literal bytes into the output
         if !out.reserve(len) {
-            return Err(Error::MemoryLimitExceeded);
+            return Err(DecompressError::MemoryLimitExceeded);
         }
         let slice = reader.take(len)?;
         out.extend(slice);
@@ -57,12 +57,12 @@ pub fn decompress_block<O: Buf<u8>>(data: &[u8], out: &mut O) -> Result<(), Erro
 
 // TODO: Probably replace with `ptr::copy`
 /// Optimized version of the copy operation.
-fn copy<O: Buf<u8>>(offset: usize, len: usize, out: &mut O) -> Result<(), Error> {
+fn copy<O: Buf<u8>>(offset: usize, len: usize, out: &mut O) -> Result<(), DecompressError> {
     let out_len = out.len();
 
     match offset {
         // invalid offset
-        0 => return Err(Error::ZeroMatchOffset),
+        0 => return Err(DecompressError::ZeroMatchOffset),
         // repeat the last byte we output
         1 => {
             if !out.resize(
@@ -72,13 +72,13 @@ fn copy<O: Buf<u8>>(offset: usize, len: usize, out: &mut O) -> Result<(), Error>
                     .copied()
                     .expect("output should ever be filled here"),
             ) {
-                return Err(Error::MemoryLimitExceeded);
+                return Err(DecompressError::MemoryLimitExceeded);
             }
         }
         // copy each byte manually
         offset => {
             if !out.reserve(len) {
-                return Err(Error::MemoryLimitExceeded);
+                return Err(DecompressError::MemoryLimitExceeded);
             }
             let start = out_len - offset;
             (0..len).for_each(|idx| {

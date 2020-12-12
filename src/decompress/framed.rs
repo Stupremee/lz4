@@ -4,11 +4,14 @@
 
 #![allow(non_upper_case_globals)]
 
-use super::{ByteIter, Error};
+use super::{ByteIter, DecompressError};
 use crate::Buf;
 use bitflags::bitflags;
 use core::hash::Hasher;
 use twox_hash::XxHash32;
+
+/// The highest bit indicates if data is compressed or uncompressed.
+const UNCOMPRESSED_DATA: u32 = 1 << 31;
 
 bitflags! {
     struct Flags: u8 {
@@ -20,18 +23,18 @@ bitflags! {
     }
 }
 
-fn parse_flags(raw: u8) -> Result<Flags, Error> {
+fn parse_flags(raw: u8) -> Result<Flags, DecompressError> {
     // first two bits represent the version that was used
     // to compress the data
     let version = raw >> 6;
 
     if version != super::VERSION {
-        return Err(Error::VersionNotSupported);
+        return Err(DecompressError::VersionNotSupported);
     }
 
     // bit 1 is reserved and should always be 0
     if (raw & 0b10) != 0 {
-        return Err(Error::ReservedBitHigh);
+        return Err(DecompressError::ReservedBitHigh);
     }
 
     Ok(Flags::from_bits_truncate(raw))
@@ -44,12 +47,12 @@ fn parse_flags(raw: u8) -> Result<Flags, Error> {
 /// and use [`stream::Decompresser`](crate::decompress::stream::Decompressor).
 ///
 /// [Frame Format]: https://github.com/lz4/lz4/blob/dev/doc/lz4_Frame_format.md
-pub fn decompress<B: Buf<u8>>(input: &[u8], out: &mut B) -> Result<(), Error> {
+pub fn decompress<B: Buf<u8>>(input: &[u8], out: &mut B) -> Result<(), DecompressError> {
     let mut reader = ByteIter::new(input);
 
     let magic = u32::from_le_bytes(reader.read()?);
     if magic != super::MAGIC {
-        return Err(Error::InvalidMagic);
+        return Err(DecompressError::InvalidMagic);
     }
 
     let mut hasher = XxHash32::with_seed(0);
@@ -62,13 +65,13 @@ pub fn decompress<B: Buf<u8>>(input: &[u8], out: &mut B) -> Result<(), Error> {
     hasher.write_u8(block_descriptor);
     // check if all reserved bits are zero
     if (block_descriptor & 0b10001111) != 0 {
-        return Err(Error::ReservedBitHigh);
+        return Err(DecompressError::ReservedBitHigh);
     }
 
     let max_block_size = ((block_descriptor >> 4) & 0b111) as usize;
     let max_block_size = match max_block_size {
         4..=7 => 1 << (max_block_size * 2 + 8),
-        _ => return Err(Error::InvalidMaxBlockSize),
+        _ => return Err(DecompressError::InvalidMaxBlockSize),
     };
 
     let content_size = if flags.contains(Flags::ContentSize) {
@@ -87,11 +90,19 @@ pub fn decompress<B: Buf<u8>>(input: &[u8], out: &mut B) -> Result<(), Error> {
     let header_checksum = reader.read_byte()?;
     let actual_hash = (hasher.finish() >> 8) as u8;
     if header_checksum != actual_hash {
-        return Err(Error::HeaderChecksumInvalid);
+        return Err(DecompressError::HeaderChecksumInvalid);
     }
 
     loop {
         let size = u32::from_le_bytes(reader.read()?);
+
+        // `0` is the end marker and indicates the end of the stream of blocks.
+        if size == 0 {
+            break;
+        }
+
+        let is_uncompressed = size & UNCOMPRESSED_DATA != 0;
+        let size = size & !UNCOMPRESSED_DATA;
 
         let mut hash = None;
         let mut hash_slice = |slice: &[u8]| {
@@ -105,29 +116,13 @@ pub fn decompress<B: Buf<u8>>(input: &[u8], out: &mut B) -> Result<(), Error> {
         };
 
         match size {
-            // `0` is the end marker and indicates the end of
-            // the stream of blocks
-            0 => {
-                if flags.contains(Flags::BlockChecksums) {
-                    // TODO: I guess this can be replaced with a
-                    let hasher = XxHash32::with_seed(0);
-                    let actual = hasher.finish() as u32;
-                    let expected = u32::from_le_bytes(reader.read()?);
-                    if actual != expected {
-                        return Err(Error::BlockChecksumInvalid);
-                    }
-                }
-
-                break;
-            }
             // if the highest bit is set, this is uncompressed data
-            size if size & 0x80000000 != 0 => {
-                let real_size = size & 0x7FFFFFFF;
-                let source = reader.take(real_size as usize)?;
+            size if is_uncompressed => {
+                let source = reader.take(size as usize)?;
                 hash_slice(source);
 
                 if !out.extend(source) {
-                    return Err(Error::MemoryLimitExceeded);
+                    return Err(DecompressError::MemoryLimitExceeded);
                 }
             }
             // if block is larger by max block size, treat it as uncompressed data
@@ -135,7 +130,7 @@ pub fn decompress<B: Buf<u8>>(input: &[u8], out: &mut B) -> Result<(), Error> {
                 let source = reader.take(size as usize)?;
                 hash_slice(source);
                 if !out.extend(source) {
-                    return Err(Error::MemoryLimitExceeded);
+                    return Err(DecompressError::MemoryLimitExceeded);
                 }
             }
             // compressed data
@@ -150,7 +145,7 @@ pub fn decompress<B: Buf<u8>>(input: &[u8], out: &mut B) -> Result<(), Error> {
             assert!(flags.contains(Flags::BlockChecksums));
             let expected = u32::from_le_bytes(reader.read()?);
             if actual != expected {
-                return Err(Error::BlockChecksumInvalid);
+                return Err(DecompressError::BlockChecksumInvalid);
             }
         }
     }
@@ -162,7 +157,13 @@ pub fn decompress<B: Buf<u8>>(input: &[u8], out: &mut B) -> Result<(), Error> {
 
         let actual = u32::from_le_bytes(reader.read()?);
         if actual != expected {
-            return Err(Error::ContentChecksumInvalid);
+            return Err(DecompressError::ContentChecksumInvalid);
+        }
+    }
+
+    if let Some(expected) = content_size {
+        if expected as usize != out.len() {
+            return Err(DecompressError::ContentSizeInvalid);
         }
     }
 

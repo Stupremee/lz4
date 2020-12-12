@@ -8,7 +8,8 @@ pub(crate) use iter::ByteIter;
 mod framed;
 pub use framed::*;
 
-pub mod raw;
+mod raw;
+pub use raw::*;
 
 /// The magic number which is at the start of every
 /// compressed data in the frame format.
@@ -20,7 +21,7 @@ const VERSION: u8 = 0b01;
 /// The error type that is returned by various decompression-related methods.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
-pub enum Error {
+pub enum DecompressError {
     /// Inidicates that the `out` pointer didn't contain enough memory
     /// to store the de-/compressed result.
     MemoryLimitExceeded,
@@ -58,29 +59,33 @@ pub enum Error {
     BlockChecksumInvalid,
     /// The checksum check for the decompressed content failed.
     ContentChecksumInvalid,
+    /// The content size that was provided in the frame header doesn't
+    /// match the actual output size.
+    ContentSizeInvalid,
 }
 
-impl fmt::Display for Error {
+impl fmt::Display for DecompressError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::MemoryLimitExceeded => f.write_str("not enough memory available in out pointer"),
-            Error::UnexpectedEof => {
+            DecompressError::MemoryLimitExceeded => f.write_str("not enough memory available in out pointer"),
+            DecompressError::UnexpectedEof => {
                 f.write_str("expected at lelast one byte to be read, but instead end was reached")
             }
-            Error::ZeroMatchOffset => f.write_str(
+            DecompressError::ZeroMatchOffset => f.write_str(
                 "The offset was zero. This is most likely caused by trying to parse invalid input.",
             ),
 
-            Error::InvalidMagic => f.write_str(
+            DecompressError::InvalidMagic => f.write_str(
                 "The magic number is invalid. This is most likely caused by trying to parse invalid input.",
             ),
-            Error::VersionNotSupported => f.write_str("The data was comrpessed using a version of LZ4 that is not supported."),
-            Error::InvalidInput => f.write_str("The provided data is invalid."),
-            Error::ReservedBitHigh => f.write_str("One of the reserved bits was 1."),
-            Error::InvalidMaxBlockSize => f.write_str("Maximum block size is invalid"),
-            Error::HeaderChecksumInvalid => f.write_str("Frame header checksum verification failed."),
-            Error::BlockChecksumInvalid => f.write_str("Block checksum verification failed."),
-            Error::ContentChecksumInvalid => f.write_str("Content checksum verification failed."),
+            DecompressError::VersionNotSupported => f.write_str("The data was comrpessed using a version of LZ4 that is not supported."),
+            DecompressError::InvalidInput => f.write_str("The provided data is invalid."),
+            DecompressError::ReservedBitHigh => f.write_str("One of the reserved bits was 1."),
+            DecompressError::InvalidMaxBlockSize => f.write_str("Maximum block size is invalid"),
+            DecompressError::HeaderChecksumInvalid => f.write_str("Frame header checksum verification failed."),
+            DecompressError::BlockChecksumInvalid => f.write_str("Block checksum verification failed."),
+            DecompressError::ContentChecksumInvalid => f.write_str("Content checksum verification failed."),
+            DecompressError::ContentSizeInvalid => f.write_str("Content size verification failed."),
         }
     }
 }

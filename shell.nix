@@ -5,6 +5,7 @@ pkgs.mkShell {
     lz4
     rust-analyzer
     python3
+    hexyl
     (latest.rustChannels.nightly.rust.override { extensions = [ "rust-src" ]; })
   ];
 }

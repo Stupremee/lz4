@@ -132,6 +132,8 @@ mod heap {
     use alloc::vec::Vec;
 
     /// A `Buf` that will dynamically allocate the memory on the heap.
+    ///
+    /// This struct is only available with the `alloc` feature enabled.
     #[derive(Clone)]
     pub struct HeapBuf<T>(Vec<T>);
 

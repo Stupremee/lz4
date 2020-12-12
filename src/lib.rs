@@ -2,12 +2,13 @@
 #![forbid(unsafe_code)]
 #![feature(min_const_generics)]
 // #![deny(warnings, missing_docs)]
-#![no_std]
+// #![no_std]
 
 #[cfg(any(feature = "alloc", test))]
 extern crate alloc;
 
-pub mod decompress;
+mod decompress;
+pub use decompress::*;
 
 mod buf;
 pub use buf::*;
