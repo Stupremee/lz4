@@ -1,0 +1,4 @@
+tests/data/64_MB.bin filter=lfs diff=lfs merge=lfs -text
+tests/data/64_MB_compressed.bin filter=lfs diff=lfs merge=lfs -text
+tests/data/64_MB_zero.bin filter=lfs diff=lfs merge=lfs -text
+tests/data/64_MB_zero_compressed.bin filter=lfs diff=lfs merge=lfs -text
