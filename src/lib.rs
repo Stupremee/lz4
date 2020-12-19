@@ -10,6 +10,9 @@ extern crate alloc;
 mod decompress;
 pub use decompress::*;
 
+mod compress;
+pub use compress::*;
+
 mod buf;
 pub use buf::*;
 
